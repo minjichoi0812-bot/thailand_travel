@@ -1,0 +1,60 @@
+name: Finalize travel planner upload
+on:
+  push:
+    branches: [main]
+    paths: ['_upload/READY']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble and verify original files
+        shell: python
+        run: |
+          from pathlib import Path
+          import base64, hashlib, shutil
+          def git_sha(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          source = Path('_upload')
+          if not (source/'READY').exists():
+              raise SystemExit('Upload is not ready; no files were changed.')
+          for filename, expected in [('app.js','d7b0f6657274f61288a7f06451cba258befebc72'),('style.css','25c41089ef4a7f2980a86706524b406ff7e42679')]:
+              chunks = sorted((source/filename).glob('*.txt'))
+              data = b''.join(p.read_bytes() for p in chunks)
+              assert git_sha(data) == expected, (filename, git_sha(data), 'source integrity mismatch')
+              Path(filename).write_bytes(data)
+          repairs = {
+              'assets/temple-mango.webp': [('BsWOqYTFbtUwRy','BsWOqYTFUbtUwRy'),('POzYykcXjg','POzYykXjg'),('KITtoYDCs/Bgx','KITtoYBCs/Bgx')],
+              'assets/landscape.webp': [('C/vuT385W1/i','C/vuT3z/W1/i'),('b+HmH1xGf6','b+Hf+40fx1f6'),('Bf/bfKT','Bf/bf/KT')]
+          }
+          expected_assets = {
+              'assets/paper-grain.png': '3eade0989865c164a2b0c8ebdad6b0755642314d',
+              'assets/leaves.webp': '7b10a480979ebdf8513ba3a86cd2f0f1b63fa01e',
+              'assets/temple-mango.webp': '877678e3fa6e241af9dfe4e7b5499b526c04e0c1',
+              'assets/landscape.webp': '2693afe8928fc2c37c185731170dad69c34f1c53'
+          }
+          for filename, expected in expected_assets.items():
+              path = Path(filename)
+              data = path.read_bytes()
+              if git_sha(data) != expected and filename in repairs:
+                  encoded = base64.b64encode(data).decode().rstrip('=')
+                  for old, new in repairs[filename]:
+                      assert old in encoded, (filename, 'missing repair marker')
+                      encoded = encoded.replace(old, new, 1)
+                  data = base64.b64decode(encoded+'='*(-len(encoded)%4))
+              assert git_sha(data) == expected, (filename, git_sha(data), 'asset integrity mismatch')
+              path.write_bytes(data)
+          assert git_sha(Path('index.html').read_bytes()) == 'f526d930e574ff2927a7ae6b029ff388649a0f2a'
+          shutil.rmtree(source)
+          Path('.github/workflows/assemble-upload.yml').unlink()
+          print('All application files and illustrations verified successfully.')
+      - name: Publish verified files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Publish verified nature travel planner with per-item payers'
+          git push origin HEAD:main
